@@ -65,7 +65,7 @@ def run_inference(args):
     try:
         # Check if it's a directory (newer format) or a single file (older format)
         if os.path.isdir(args.lora_path):
-             pipe.load_lora_weights(args.lora_path)
+             pipe.load_lora_weights(args.lora_path, weight_name=args.lora_name)
         elif os.path.isfile(args.lora_path):
              # Older diffusers might expect the state dict path directly
              pipe.load_lora_weights(os.path.dirname(args.lora_path), weight_name=args.lora_name)
