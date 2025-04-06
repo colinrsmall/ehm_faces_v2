@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import argparse
 import zipfile
 from PIL import Image
-from rembg import remove, new_session
+import torchvision.transforms as transforms
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
@@ -24,8 +24,7 @@ DEFAULT_NUM_IMAGES = 25 # Default number of images to generate
 DEFAULT_GENERATE_SIZE = 512 # Size for the initial generation
 DEFAULT_OUTPUT_SIZE = 0    # Final output size after potential resize (0 = no resize)
 DEFAULT_BATCH_SIZE = 0     # Number of images per zip file (0 = no zipping)
-session = new_session("birefnet-portrait")  # Set background removal model
-
+DEFAULT_MODNET_MODEL_PATH = "./modnet_photographic_portrait_matting.pt" # << --- IMPORTANT: Update this path
 
 def parse_arguments():
     """Parses command-line arguments."""
@@ -44,6 +43,7 @@ def parse_arguments():
     parser.add_argument("--generate_size", type=int, default=DEFAULT_GENERATE_SIZE, help="Size (width and height) for initial image generation.")
     parser.add_argument("--output_size", type=int, default=DEFAULT_OUTPUT_SIZE, help="Final square size after optional Lanczos downsampling (0 = no resize).")
     parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Number of images per zip file (0 = no zipping).")
+    parser.add_argument("--modnet_model_path", type=str, default=DEFAULT_MODNET_MODEL_PATH, help="Path to the MODNet TorchScript model (.pt file).")
     return parser.parse_args()
 
 def run_inference(args):
@@ -71,6 +71,28 @@ def run_inference(args):
     except Exception as e:
         print(f"Error loading base model: {e}")
         return
+
+    # --- Load MODNet Model --- #
+    modnet_model = None
+    if not os.path.exists(args.modnet_model_path):
+        print(f"Warning: MODNet model not found at {args.modnet_model_path}. Background removal will be skipped.")
+    else:
+        try:
+            print(f"Loading MODNet model from: {args.modnet_model_path}")
+            modnet_model = torch.jit.load(args.modnet_model_path).to(args.device).eval()
+            print("MODNet model loaded successfully.")
+        except Exception as modnet_e:
+            print(f"Error loading MODNet model: {modnet_e}. Background removal will be skipped.")
+            modnet_model = None
+
+    # --- Define MODNet Preprocessing --- #
+    # Typical MODNet preprocessing: Resize, ToTensor, Normalize
+    modnet_input_size = 512 # MODNet typically expects 512x512 input
+    modnet_preprocess = transforms.Compose([
+        transforms.Resize((modnet_input_size, modnet_input_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]), # Common normalization for portrait matting
+    ])
 
     # --- Load LoRA Weights ---
     print(f"Loading LoRA weights from: {args.lora_path}")
@@ -205,21 +227,60 @@ def run_inference(args):
                     height=args.generate_size, # Use generate_size
                 ).images[0]
 
-            # --- Optional Resizing ---
-            if args.output_size > 0 and args.output_size < args.generate_size:
+            # --- Background Removal using MODNet (if loaded) --- #
+            image_rgba = None
+            if modnet_model is not None:
+                try:
+                    # print(f"Removing background for {name}...")
+                    image_rgb = image.convert("RGB") # Ensure image is RGB
+                    original_size = image_rgb.size
+
+                    # Preprocess
+                    input_tensor = modnet_preprocess(image_rgb).unsqueeze(0).to(args.device)
+
+                    # Inference
+                    with torch.no_grad():
+                        # MODNet TorchScript might return tuple, matte is often first element
+                        matte_tensor = modnet_model(input_tensor)
+                        if isinstance(matte_tensor, (tuple, list)):
+                             matte_tensor = matte_tensor[0]
+
+                    # Postprocess matte
+                    matte_tensor = matte_tensor.squeeze().cpu()
+                    # Resize matte back to original image size
+                    matte_resized = transforms.ToPILImage()(matte_tensor.unsqueeze(0))
+                    matte_final = matte_resized.resize(original_size, Image.BILINEAR) # Use BILINEAR for smooth matte
+
+                    # Combine image and matte
+                    image_rgba = image_rgb.copy()
+                    image_rgba.putalpha(matte_final)
+
+                    # print(f"Background removed for {name}.")
+                except Exception as bg_err:
+                    print(f"Warning: MODNet background removal failed for {name}: {bg_err}")
+                    image_rgba = image # Fallback to original if removal fails
+            else:
+                 # If MODNet wasn't loaded, just use the original image
+                 image_rgba = image
+
+            # --- Optional Resizing (Applied AFTER background removal if performed) ---
+            # Use image_rgba if available, otherwise original image
+            image_to_resize = image_rgba if image_rgba is not None else image
+            if args.output_size > 0 and args.output_size < image_to_resize.size[0]: # Compare with current size
                 try:
                     # print(f"Resizing image from {args.generate_size}x{args.generate_size} to {args.output_size}x{args.output_size} using Lanczos...")
-                    image = image.resize((args.output_size, args.output_size), Image.LANCZOS)
+                    image_final = image_to_resize.resize((args.output_size, args.output_size), Image.LANCZOS)
                 except Exception as resize_e:
                     print(f"Warning: Could not resize image for {name}: {resize_e}")
-            elif args.output_size > 0 and args.output_size >= args.generate_size:
-                 print(f"Warning: output_size ({args.output_size}) >= generate_size ({args.generate_size}). Skipping resize for {name}.")
-
-            # Remove background
-            image = remove(image)
+                    image_final = image_to_resize # Fallback on error
+            elif args.output_size > 0 and args.output_size >= image_to_resize.size[0]:
+                print(f"Warning: output_size ({args.output_size}) >= current size ({image_to_resize.size[0]}). Skipping resize for {name}.")
+                image_final = image_to_resize
+            else:
+                image_final = image_to_resize # No resize needed or specified
 
             # Save image
-            image.save(output_path)
+            image_final.save(output_path) # Save the potentially resized RGBA image
 
             # --- Batch Zipping Logic ---
             if args.batch_size > 0:
