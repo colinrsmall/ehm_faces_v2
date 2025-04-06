@@ -6,7 +6,7 @@ import torch
 from tqdm.auto import tqdm
 import argparse
 import zipfile
-from PIL import Image, ImageResampling
+from PIL import Image
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
@@ -206,7 +206,7 @@ def run_inference(args):
             if args.output_size > 0 and args.output_size < args.generate_size:
                 try:
                     # print(f"Resizing image from {args.generate_size}x{args.generate_size} to {args.output_size}x{args.output_size} using Lanczos...")
-                    image = image.resize((args.output_size, args.output_size), ImageResampling.LANCZOS)
+                    image = image.resize((args.output_size, args.output_size), Image.LANCZOS)
                 except Exception as resize_e:
                     print(f"Warning: Could not resize image for {name}: {resize_e}")
             elif args.output_size > 0 and args.output_size >= args.generate_size:
