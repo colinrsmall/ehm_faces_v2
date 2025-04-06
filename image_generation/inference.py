@@ -48,6 +48,7 @@ def parse_arguments():
     parser.add_argument("--modnet_model_path", type=str, default=DEFAULT_MODNET_MODEL_PATH, help="Path to the MODNet TorchScript model (.pt file).")
     parser.add_argument("--prompts_file", type=str, default=DEFAULT_PROMPTS_FILE, help="Path to the JSON file containing prompt templates.")
     parser.add_argument("--prompt_key", type=str, default=DEFAULT_PROMPT_KEY, help="Key of the prompt template to use from the JSON file.")
+    parser.add_argument("--remove_background", action='store_true', help="Enable background removal using MODNet.")
     return parser.parse_args()
 
 def run_inference(args):
@@ -98,27 +99,30 @@ def run_inference(args):
         print(f"Error loading base model: {e}")
         return
 
-    # --- Load MODNet Model --- #
+    # --- Load MODNet Model (Conditional) --- #
     modnet_model = None
-    if not os.path.exists(args.modnet_model_path):
-        print(f"Warning: MODNet model not found at {args.modnet_model_path}. Background removal will be skipped.")
-    else:
-        try:
-            print(f"Loading MODNet model from: {args.modnet_model_path}")
-            modnet_model = torch.jit.load(args.modnet_model_path).to(args.device).eval()
-            print("MODNet model loaded successfully.")
-        except Exception as modnet_e:
-            print(f"Error loading MODNet model: {modnet_e}. Background removal will be skipped.")
-            modnet_model = None
+    modnet_preprocess = None
+    if args.remove_background:
+        if not os.path.exists(args.modnet_model_path):
+            print(f"Warning: --remove_background specified, but MODNet model not found at {args.modnet_model_path}. Background removal will be skipped.")
+        else:
+            try:
+                print(f"Loading MODNet model from: {args.modnet_model_path}")
+                modnet_model = torch.jit.load(args.modnet_model_path).to(args.device).eval()
+                print("MODNet model loaded successfully.")
 
-    # --- Define MODNet Preprocessing --- #
-    # Typical MODNet preprocessing: Resize, ToTensor, Normalize
-    modnet_input_size = 512 # MODNet typically expects 512x512 input
-    modnet_preprocess = transforms.Compose([
-        transforms.Resize((modnet_input_size, modnet_input_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]), # Common normalization for portrait matting
-    ])
+                # --- Define MODNet Preprocessing (only if model loads) --- #
+                modnet_input_size = 512 # MODNet typically expects 512x512 input
+                modnet_preprocess = transforms.Compose([
+                    transforms.Resize((modnet_input_size, modnet_input_size)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]), # Common normalization for portrait matting
+                ])
+            except Exception as modnet_e:
+                print(f"Error loading MODNet model: {modnet_e}. Background removal will be skipped.")
+                modnet_model = None
+    else:
+        print(f"Warning: MODNet model not found at {args.modnet_model_path}. Background removal will be skipped.")
 
     # --- Load LoRA Weights ---
     print(f"Loading LoRA weights from: {args.lora_path}")
@@ -260,9 +264,9 @@ def run_inference(args):
                     height=args.generate_size, # Use generate_size
                 ).images[0]
 
-            # --- Background Removal using MODNet (if loaded) --- #
+            # --- Background Removal using MODNet (Conditional) --- #
             image_rgba = None
-            if modnet_model is not None:
+            if args.remove_background and modnet_model is not None:
                 try:
                     # print(f"Removing background for {name}...")
                     image_rgb = image.convert("RGB") # Ensure image is RGB
@@ -293,7 +297,7 @@ def run_inference(args):
                     print(f"Warning: MODNet background removal failed for {name}: {bg_err}")
                     image_rgba = image # Fallback to original if removal fails
             else:
-                 # If MODNet wasn't loaded, just use the original image
+                 # If MODNet wasn't loaded or --remove_background not specified, just use the original image
                  image_rgba = image
 
             # --- Optional Resizing (Applied AFTER background removal if performed) ---
