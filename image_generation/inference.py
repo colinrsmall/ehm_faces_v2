@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 import argparse
 import zipfile
 from PIL import Image
+from rembg import remove
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
@@ -211,6 +212,9 @@ def run_inference(args):
                     print(f"Warning: Could not resize image for {name}: {resize_e}")
             elif args.output_size > 0 and args.output_size >= args.generate_size:
                  print(f"Warning: output_size ({args.output_size}) >= generate_size ({args.generate_size}). Skipping resize for {name}.")
+
+            # Remove background
+            image = remove(image)
 
             # Save image
             image.save(output_path)
