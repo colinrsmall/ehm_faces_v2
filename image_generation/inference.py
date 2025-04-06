@@ -33,7 +33,6 @@ def parse_arguments():
     parser.add_argument("--steps", type=int, default=NUM_INFERENCE_STEPS, help="Number of inference steps.")
     parser.add_argument("--guidance", type=float, default=GUIDANCE_SCALE, help="Guidance scale.")
     parser.add_argument("--num_images", type=int, default=DEFAULT_NUM_IMAGES, help="Number of images to generate.")
-    parser.add_argument("--use_sdpa", action='store_true', help="Enable PyTorch 2.0 Scaled Dot Product Attention (SDPA) for potential speedup.")
     parser.add_argument("--use_torch_compile", action='store_true', help="Enable torch.compile (PyTorch 2.0+) for potential speedup (adds compile time).")
     parser.add_argument("--fuse_lora", action='store_true', help="Fuse LoRA weights into the base model before generation.")
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Width of the generated images.")
@@ -64,20 +63,6 @@ def run_inference(args):
     except Exception as e:
         print(f"Error loading base model: {e}")
         return
-
-    # --- Optional: Enable Attention Optimization (SDPA) ---
-    # Note: xFormers seems incompatible with Flux model's attention args, using SDPA instead.
-    if args.use_sdpa:
-        print("Attempting to enable PyTorch Scaled Dot Product Attention (SDPA)...")
-        # Requires PyTorch 2.0+
-        if hasattr(torch, 'nn') and hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
-             try:
-                 pipe.enable_sdpa_attention()
-                 print("SDPA enabled successfully.")
-             except Exception as e:
-                  print(f"Could not enable SDPA: {e}")
-        else:
-             print("SDPA not available (requires PyTorch 2.0+).")
 
     # --- Load LoRA Weights ---
     print(f"Loading LoRA weights from: {args.lora_path}")
