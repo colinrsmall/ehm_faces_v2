@@ -9,25 +9,29 @@ import argparse
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
-DEFAULT_LORA_PATH = "output/my_first_flex_lora_v1/step_2000" # Path to your trained LoRA weights
+DEFAULT_LORA_PATH = "/home/colin/ai-toolkit/output/ehm_facegen_v1" # Path to your trained LoRA weights
+DEFAULT_LORA_NAME = "ehm_facegen_v1_000003000.safetensors"
 DEFAULT_INPUT_CSV = "input_players.csv" # CSV with player data
 DEFAULT_OUTPUT_DIR = "generated_images" # Directory to save generated images
 DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-PROMPT_TEMPLATE = "h0ck3y A studio headshot of a young hockey player. The player is wearing shoulder pads under their jersey, is sitting square to the camera, and is smiling. The player is from {nationality} and is named {name}."
+PROMPT_TEMPLATE = "h0ck3y A studio headshot of an 18-year-old hockey player. The player is wearing shoulder pads under their jersey, is sitting square to the camera, and is smiling. The player is from {nationality} and is named {name}."
 FILENAME_DATE_FORMAT = "%d_%m_%Y" # Date format for output filename
-NUM_INFERENCE_STEPS = 30 # Number of diffusion steps
-GUIDANCE_SCALE = 5 # Guidance scale for inference
+NUM_INFERENCE_STEPS = 40 # Number of diffusion steps
+GUIDANCE_SCALE = 4 # Guidance scale for inference
+DEFAULT_NUM_IMAGES = 25 # Default number of images to generate
 
 def parse_arguments():
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(description="Generate hockey player images using a fine-tuned model.")
     parser.add_argument("--model_name", type=str, default=DEFAULT_MODEL_NAME, help="Base diffusion model name.")
     parser.add_argument("--lora_path", type=str, default=DEFAULT_LORA_PATH, help="Path to the trained LoRA weights directory or file.")
+    parser.add_argument("--lora_name", type=str, default=DEFAULT_LORA_NAME, help="Name of the LoRA weights file.")
     parser.add_argument("--input_csv", type=str, default=DEFAULT_INPUT_CSV, help="Path to the input CSV file.")
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR, help="Directory to save generated images.")
     parser.add_argument("--device", type=str, default=DEFAULT_DEVICE, help="Device to run inference on ('cuda' or 'cpu').")
     parser.add_argument("--steps", type=int, default=NUM_INFERENCE_STEPS, help="Number of inference steps.")
     parser.add_argument("--guidance", type=float, default=GUIDANCE_SCALE, help="Guidance scale.")
+    parser.add_argument("--num_images", type=int, default=DEFAULT_NUM_IMAGES, help="Number of images to generate.")
     return parser.parse_args()
 
 def run_inference(args):
@@ -57,8 +61,8 @@ def run_inference(args):
              pipe.load_lora_weights(args.lora_path)
         elif os.path.isfile(args.lora_path):
              # Older diffusers might expect the state dict path directly
-             pipe.load_lora_weights(os.path.dirname(args.lora_path), weight_name=os.path.basename(args.lora_path))
-             print(f"  (Loaded single LoRA file: {os.path.basename(args.lora_path)})")
+             pipe.load_lora_weights(os.path.dirname(args.lora_path), weight_name=args.lora_name)
+             print(f"  (Loaded single LoRA file: {args.lora_name}")
         else:
              print(f"Error: LoRA path is neither a valid directory nor file: {args.lora_path}")
              return
@@ -87,6 +91,15 @@ def run_inference(args):
         print(f"Error reading CSV file: {e}")
         return
 
+    # Limit the number of images if requested
+    if args.num_images > 0:
+        print(f"Limiting generation to the first {args.num_images} players from the CSV.")
+        df = df.head(args.num_images)
+    elif args.num_images == 0:
+        print("Number of images set to 0. No images will be generated.")
+        return
+    # else: num_images is -1 (default), generate all
+
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Saving generated images to: {args.output_dir}")
 
@@ -106,13 +119,12 @@ def run_inference(args):
 
             # Format date of birth for filename
             try:
-                 # Attempt to parse common date formats if needed, but assume it's parsable for now
-                 # IMPORTANT: Adjust the format string '%Y-%m-%d' if your CSV uses a different date format!
-                 dob_obj = datetime.strptime(dob_str, '%Y-%m-%d')
+                 # IMPORTANT: Adjust the format string '%d.%m.%Y' if your CSV uses a different date format!
+                 dob_obj = datetime.strptime(dob_str, '%d.%m.%Y')
                  dob_formatted = dob_obj.strftime(FILENAME_DATE_FORMAT)
             except ValueError:
-                 print(f"Warning: Could not parse date '{dob_str}' for {name} using format '%Y-%m-%d'. Using original string as fallback.")
-                 dob_formatted = dob_str.replace("/", "_").replace("-", "_").replace(" ", "_") # Basic fallback
+                 print(f"Warning: Could not parse date '{dob_str}' for {name} using format '%d.%m.%Y'. Using original string as fallback.")
+                 dob_formatted = dob_str.replace(".", "_").replace("/", "_").replace("-", "_").replace(" ", "_") # Basic fallback
 
             # Construct prompt
             prompt = PROMPT_TEMPLATE.format(nationality=nationality, name=name)
