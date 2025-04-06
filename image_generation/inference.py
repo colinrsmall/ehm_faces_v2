@@ -5,6 +5,8 @@ from diffusers import DiffusionPipeline
 import torch
 from tqdm.auto import tqdm
 import argparse
+import zipfile
+from PIL import Image, ImageResampling
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
@@ -18,9 +20,9 @@ FILENAME_DATE_FORMAT = "%d_%m_%Y" # Date format for output filename
 NUM_INFERENCE_STEPS = 40 # Number of diffusion steps
 GUIDANCE_SCALE = 4 # Guidance scale for inference
 DEFAULT_NUM_IMAGES = 25 # Default number of images to generate
-DEFAULT_WIDTH = 512 # Default output image width
-DEFAULT_HEIGHT = 512 # Default output image height
-
+DEFAULT_GENERATE_SIZE = 512 # Size for the initial generation
+DEFAULT_OUTPUT_SIZE = 0    # Final output size after potential resize (0 = no resize)
+DEFAULT_BATCH_SIZE = 0     # Number of images per zip file (0 = no zipping)
 
 def parse_arguments():
     """Parses command-line arguments."""
@@ -36,8 +38,9 @@ def parse_arguments():
     parser.add_argument("--num_images", type=int, default=DEFAULT_NUM_IMAGES, help="Number of images to generate.")
     parser.add_argument("--use_torch_compile", action='store_true', help="Enable torch.compile (PyTorch 2.0+) for potential speedup (adds compile time).")
     parser.add_argument("--fuse_lora", action='store_true', help="Fuse LoRA weights into the base model before generation.")
-    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Width of the generated images.")
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Height of the generated images.")
+    parser.add_argument("--generate_size", type=int, default=DEFAULT_GENERATE_SIZE, help="Size (width and height) for initial image generation.")
+    parser.add_argument("--output_size", type=int, default=DEFAULT_OUTPUT_SIZE, help="Final square size after optional Lanczos downsampling (0 = no resize).")
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Number of images per zip file (0 = no zipping).")
     return parser.parse_args()
 
 def run_inference(args):
@@ -148,6 +151,11 @@ def run_inference(args):
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Saving generated images to: {args.output_dir}")
 
+    # --- Batch Zipping Setup ---
+    batch_images = []
+    batch_num = 1
+    zip_created = False
+
     # --- Generation Loop ---
     print(f"Starting image generation for {len(df)} players...")
     for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="Generating Images"):
@@ -190,16 +198,65 @@ def run_inference(args):
                     prompt=prompt,
                     num_inference_steps=args.steps,
                     guidance_scale=args.guidance,
-                    width=args.width,
-                    height=args.height,
+                    width=args.generate_size, # Use generate_size
+                    height=args.generate_size, # Use generate_size
                 ).images[0]
+
+            # --- Optional Resizing ---
+            if args.output_size > 0 and args.output_size < args.generate_size:
+                try:
+                    # print(f"Resizing image from {args.generate_size}x{args.generate_size} to {args.output_size}x{args.output_size} using Lanczos...")
+                    image = image.resize((args.output_size, args.output_size), ImageResampling.LANCZOS)
+                except Exception as resize_e:
+                    print(f"Warning: Could not resize image for {name}: {resize_e}")
+            elif args.output_size > 0 and args.output_size >= args.generate_size:
+                 print(f"Warning: output_size ({args.output_size}) >= generate_size ({args.generate_size}). Skipping resize for {name}.")
 
             # Save image
             image.save(output_path)
 
+            # --- Batch Zipping Logic ---
+            if args.batch_size > 0:
+                batch_images.append(output_path)
+                zip_created = False # Reset flag for this batch
+
+                # Check if batch is full or if it's the last image
+                is_last_image = (index == len(df) - 1)
+                if len(batch_images) == args.batch_size or (is_last_image and batch_images):
+                    zip_filename = os.path.join(args.output_dir, f"batch_{batch_num}.zip")
+                    print(f"\nCreating zip archive: {zip_filename} with {len(batch_images)} images...")
+                    try:
+                        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                            for img_path in tqdm(batch_images, desc=f"Zipping Batch {batch_num}", leave=False):
+                                if os.path.exists(img_path):
+                                    zipf.write(img_path, os.path.basename(img_path))
+                                else:
+                                     print(f"Warning: Image file not found for zipping: {img_path}")
+                        zip_created = True
+                    except Exception as zip_e:
+                        print(f"Error creating zip file {zip_filename}: {zip_e}")
+
+                    # Reset for next batch
+                    batch_images = []
+                    batch_num += 1
+
         except Exception as e:
             print(f"Error generating image for row {index+1} ({name}): {e}")
             # Continue to the next player
+
+    # Final check for any remaining images if zipping was interrupted or loop ended abruptly
+    if args.batch_size > 0 and batch_images and not zip_created:
+         zip_filename = os.path.join(args.output_dir, f"batch_{batch_num}.zip")
+         print(f"\nCreating final zip archive: {zip_filename} with {len(batch_images)} images...")
+         try:
+             with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                 for img_path in tqdm(batch_images, desc=f"Zipping Final Batch", leave=False):
+                      if os.path.exists(img_path):
+                          zipf.write(img_path, os.path.basename(img_path))
+                      else:
+                           print(f"Warning: Image file not found for zipping: {img_path}")
+         except Exception as zip_e:
+             print(f"Error creating final zip file {zip_filename}: {zip_e}")
 
     print("Image generation complete.")
 
