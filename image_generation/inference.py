@@ -31,6 +31,9 @@ def parse_arguments():
     parser.add_argument("--steps", type=int, default=NUM_INFERENCE_STEPS, help="Number of inference steps.")
     parser.add_argument("--guidance", type=float, default=GUIDANCE_SCALE, help="Guidance scale.")
     parser.add_argument("--num_images", type=int, default=DEFAULT_NUM_IMAGES, help="Number of images to generate.")
+    parser.add_argument("--use_xformers", action='store_true', help="Enable xFormers memory efficient attention for potential speedup.")
+    parser.add_argument("--use_torch_compile", action='store_true', help="Enable torch.compile (PyTorch 2.0+) for potential speedup (adds compile time).")
+    parser.add_argument("--fuse_lora", action='store_true', help="Fuse LoRA weights into the base model before generation.")
     return parser.parse_args()
 
 def run_inference(args):
@@ -58,6 +61,19 @@ def run_inference(args):
         print(f"Error loading base model: {e}")
         return
 
+    # --- Optional: Enable xFormers ---
+    if args.use_xformers:
+        print("Attempting to enable xFormers memory efficient attention...")
+        try:
+            # Check if xformers is installed before attempting to enable
+            import xformers
+            pipe.enable_xformers_memory_efficient_attention()
+            print("xFormers enabled successfully.")
+        except ImportError:
+            print("xFormers not installed. Cannot enable. Run: pip install xformers")
+        except Exception as e:
+             print(f"Could not enable xFormers: {e}")
+
     print(f"Loading LoRA weights from: {args.lora_path}")
     if not os.path.exists(args.lora_path):
         print(f"Error: LoRA path not found: {args.lora_path}")
@@ -79,7 +95,32 @@ def run_inference(args):
         # Optionally continue without LoRA if desired, but safer to exit
         return
 
-    # pipe.fuse_lora() # Optional: Fuse LoRA for potentially faster inference after loading
+    # --- Optional: Fuse LoRA ---
+    if args.fuse_lora:
+        print("Attempting to fuse LoRA weights into the base model...")
+        try:
+            pipe.fuse_lora()
+            print("LoRA weights fused successfully.")
+        except Exception as e:
+            print(f"Could not fuse LoRA weights: {e} (Ensure LoRA was loaded correctly)")
+            # Decide if you want to continue without fusing or exit
+            # return
+
+    # --- Optional: Enable torch.compile ---
+    if args.use_torch_compile:
+        # Requires PyTorch 2.0+
+        if hasattr(torch, 'compile') and args.device == "cuda": # Only compile for CUDA
+            print("Attempting to compile UNet with torch.compile (this may take a moment)...")
+            # Options: "default", "reduce-overhead", "max-autotune"
+            try:
+                pipe.unet = torch.compile(pipe.unet, mode="reduce-overhead", fullgraph=True)
+                print("UNet compiled successfully.")
+            except Exception as e:
+                print(f"Torch compile failed: {e}")
+        elif not hasattr(torch, 'compile'):
+            print("torch.compile not available (requires PyTorch 2.0+). Cannot enable.")
+        elif args.device != "cuda":
+            print("torch.compile currently only enabled for CUDA device in this script.")
 
     # --- Prepare Input/Output ---
     print(f"Reading player data from: {args.input_csv}")
