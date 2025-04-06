@@ -8,6 +8,7 @@ import argparse
 import zipfile
 from PIL import Image
 import torchvision.transforms as transforms
+import json
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
@@ -16,7 +17,6 @@ DEFAULT_LORA_NAME = "ehm_facegen_v1_000003000.safetensors"
 DEFAULT_INPUT_CSV = "input_players.csv" # CSV with player data
 DEFAULT_OUTPUT_DIR = "generated_images" # Directory to save generated images
 DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-PROMPT_TEMPLATE = "h0ck3y A studio headshot of an 18-year-old hockey player against a dark blue (#131A23) background. The player is wearing shoulder pads under their jersey, is sitting square to the camera, and is smiling. The player is from {nationality} and is named {name}."
 FILENAME_DATE_FORMAT = "%d_%m_%Y" # Date format for output filename
 NUM_INFERENCE_STEPS = 40 # Number of diffusion steps
 GUIDANCE_SCALE = 4 # Guidance scale for inference
@@ -25,6 +25,8 @@ DEFAULT_GENERATE_SIZE = 512 # Size for the initial generation
 DEFAULT_OUTPUT_SIZE = 0    # Final output size after potential resize (0 = no resize)
 DEFAULT_BATCH_SIZE = 0     # Number of images per zip file (0 = no zipping)
 DEFAULT_MODNET_MODEL_PATH = "./modnet_photographic_portrait_matting.pt" # << --- IMPORTANT: Update this path
+DEFAULT_PROMPTS_FILE = "./prompts.json" # Path to prompts JSON
+DEFAULT_PROMPT_KEY = "junior_player"   # Default prompt key to use
 
 def parse_arguments():
     """Parses command-line arguments."""
@@ -44,10 +46,34 @@ def parse_arguments():
     parser.add_argument("--output_size", type=int, default=DEFAULT_OUTPUT_SIZE, help="Final square size after optional Lanczos downsampling (0 = no resize).")
     parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Number of images per zip file (0 = no zipping).")
     parser.add_argument("--modnet_model_path", type=str, default=DEFAULT_MODNET_MODEL_PATH, help="Path to the MODNet TorchScript model (.pt file).")
+    parser.add_argument("--prompts_file", type=str, default=DEFAULT_PROMPTS_FILE, help="Path to the JSON file containing prompt templates.")
+    parser.add_argument("--prompt_key", type=str, default=DEFAULT_PROMPT_KEY, help="Key of the prompt template to use from the JSON file.")
     return parser.parse_args()
 
 def run_inference(args):
     """Loads the model and generates images based on the input CSV."""
+
+    # --- Load Prompt Template --- #
+    prompt_template = None
+    try:
+        print(f"Loading prompts from: {args.prompts_file}")
+        with open(args.prompts_file, 'r') as f:
+            prompts = json.load(f)
+        if args.prompt_key in prompts:
+            prompt_template = prompts[args.prompt_key]
+            print(f"Using prompt key '{args.prompt_key}'")
+        else:
+            print(f"Error: Prompt key '{args.prompt_key}' not found in {args.prompts_file}. Exiting.")
+            return
+    except FileNotFoundError:
+        print(f"Error: Prompts file not found at {args.prompts_file}. Exiting.")
+        return
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from {args.prompts_file}. Exiting.")
+        return
+    except Exception as e:
+        print(f"Error loading prompts: {e}. Exiting.")
+        return
 
     print(f"Using device: {args.device}")
 
@@ -205,7 +231,14 @@ def run_inference(args):
                  dob_formatted = dob_str.replace(".", "_").replace("/", "_").replace("-", "_").replace(" ", "_") # Basic fallback
 
             # Construct prompt
-            prompt = PROMPT_TEMPLATE.format(nationality=nationality, name=name)
+            try:
+                prompt = prompt_template.format(nationality=nationality, name=name)
+            except KeyError as fmt_e:
+                 print(f"Warning: Prompt template likely missing expected placeholder {{{fmt_e}}}. Skipping generation for {name}.")
+                 continue
+            except Exception as fmt_e:
+                 print(f"Warning: Error formatting prompt for {name}: {fmt_e}. Skipping generation.")
+                 continue
 
             # Construct filename
             filename = f"{first_name}_{last_name}_{dob_formatted}.png"
