@@ -33,7 +33,7 @@ def parse_arguments():
     parser.add_argument("--steps", type=int, default=NUM_INFERENCE_STEPS, help="Number of inference steps.")
     parser.add_argument("--guidance", type=float, default=GUIDANCE_SCALE, help="Guidance scale.")
     parser.add_argument("--num_images", type=int, default=DEFAULT_NUM_IMAGES, help="Number of images to generate.")
-    parser.add_argument("--use_xformers", action='store_true', help="Enable xFormers memory efficient attention for potential speedup.")
+    parser.add_argument("--use_sdpa", action='store_true', help="Enable PyTorch 2.0 Scaled Dot Product Attention (SDPA) for potential speedup.")
     parser.add_argument("--use_torch_compile", action='store_true', help="Enable torch.compile (PyTorch 2.0+) for potential speedup (adds compile time).")
     parser.add_argument("--fuse_lora", action='store_true', help="Fuse LoRA weights into the base model before generation.")
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Width of the generated images.")
@@ -65,19 +65,21 @@ def run_inference(args):
         print(f"Error loading base model: {e}")
         return
 
-    # --- Optional: Enable xFormers ---
-    if args.use_xformers:
-        print("Attempting to enable xFormers memory efficient attention...")
-        try:
-            # Check if xformers is installed before attempting to enable
-            import xformers
-            pipe.enable_xformers_memory_efficient_attention()
-            print("xFormers enabled successfully.")
-        except ImportError:
-            print("xFormers not installed. Cannot enable. Run: pip install xformers")
-        except Exception as e:
-             print(f"Could not enable xFormers: {e}")
+    # --- Optional: Enable Attention Optimization (SDPA) ---
+    # Note: xFormers seems incompatible with Flux model's attention args, using SDPA instead.
+    if args.use_sdpa:
+        print("Attempting to enable PyTorch Scaled Dot Product Attention (SDPA)...")
+        # Requires PyTorch 2.0+
+        if hasattr(torch, 'nn') and hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
+             try:
+                 pipe.enable_sdpa_attention()
+                 print("SDPA enabled successfully.")
+             except Exception as e:
+                  print(f"Could not enable SDPA: {e}")
+        else:
+             print("SDPA not available (requires PyTorch 2.0+).")
 
+    # --- Load LoRA Weights ---
     print(f"Loading LoRA weights from: {args.lora_path}")
     if not os.path.exists(args.lora_path):
         print(f"Error: LoRA path not found: {args.lora_path}")
@@ -111,20 +113,24 @@ def run_inference(args):
             # return
 
     # --- Optional: Enable torch.compile ---
+    # Note: Targeting pipe.transformer for Flux models instead of pipe.unet
     if args.use_torch_compile:
-        # Requires PyTorch 2.0+
-        if hasattr(torch, 'compile') and args.device == "cuda": # Only compile for CUDA
-            print("Attempting to compile UNet with torch.compile (this may take a moment)...")
-            # Options: "default", "reduce-overhead", "max-autotune"
-            try:
-                pipe.unet = torch.compile(pipe.unet, mode="reduce-overhead", fullgraph=True)
-                print("UNet compiled successfully.")
-            except Exception as e:
-                print(f"Torch compile failed: {e}")
-        elif not hasattr(torch, 'compile'):
-            print("torch.compile not available (requires PyTorch 2.0+). Cannot enable.")
-        elif args.device != "cuda":
-            print("torch.compile currently only enabled for CUDA device in this script.")
+         # Requires PyTorch 2.0+
+         if hasattr(torch, 'compile') and args.device == "cuda": # Only compile for CUDA
+             print("Attempting to compile model's transformer block with torch.compile (this may take a moment)...")
+             # Options: "default", "reduce-overhead", "max-autotune"
+             if hasattr(pipe, 'transformer'):
+                 try:
+                     pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead", fullgraph=True)
+                     print("Transformer compiled successfully.")
+                 except Exception as e:
+                     print(f"Torch compile failed on transformer: {e}")
+             else:
+                 print("Torch compile skipped: pipe.transformer attribute not found.")
+         elif not hasattr(torch, 'compile'):
+             print("torch.compile not available (requires PyTorch 2.0+). Cannot enable.")
+         elif args.device != "cuda":
+             print("torch.compile currently only enabled for CUDA device in this script.")
 
     # --- Prepare Input/Output ---
     print(f"Reading player data from: {args.input_csv}")
