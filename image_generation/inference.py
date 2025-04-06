@@ -21,6 +21,7 @@ DEFAULT_NUM_IMAGES = 25 # Default number of images to generate
 DEFAULT_WIDTH = 512 # Default output image width
 DEFAULT_HEIGHT = 512 # Default output image height
 
+
 def parse_arguments():
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(description="Generate hockey player images using a fine-tuned model.")
@@ -60,6 +61,7 @@ def run_inference(args):
             args.model_name,
             torch_dtype=dtype,
         ).to(args.device)
+        pipe.set_progress_bar_config(leave=False)
     except Exception as e:
         print(f"Error loading base model: {e}")
         return
@@ -190,7 +192,6 @@ def run_inference(args):
                     guidance_scale=args.guidance,
                     width=args.width,
                     height=args.height,
-                    disable_tqdm=True # Disable inner step progress bar
                 ).images[0]
 
             # Save image
