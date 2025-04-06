@@ -42,22 +42,17 @@ def run_inference(args):
     print(f"Loading base model: {args.model_name}")
     try:
         dtype = torch.float32 # Default for CPU
-        variant = None
         if args.device == "cuda":
             if torch.cuda.is_bf16_supported():
                 print("  (Using bfloat16 precision as hardware supports it)")
                 dtype = torch.bfloat16
-                # Still try to load fp16 variant if available, library handles casting
-                variant = "fp16"
             else:
                 print("  (Using float16 precision - bf16 not supported by hardware)")
                 dtype = torch.float16
-                variant = "fp16"
 
         pipe = DiffusionPipeline.from_pretrained(
             args.model_name,
             torch_dtype=dtype,
-            variant=variant, # Try fp16 variant download if available
         ).to(args.device)
     except Exception as e:
         print(f"Error loading base model: {e}")
