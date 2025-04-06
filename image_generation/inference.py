@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import argparse
 import zipfile
 from PIL import Image
-from rembg import remove
+from rembg import remove, new_session
 
 # --- Configuration ---
 DEFAULT_MODEL_NAME = "ostris/Flex.1-alpha"
@@ -24,6 +24,8 @@ DEFAULT_NUM_IMAGES = 25 # Default number of images to generate
 DEFAULT_GENERATE_SIZE = 512 # Size for the initial generation
 DEFAULT_OUTPUT_SIZE = 0    # Final output size after potential resize (0 = no resize)
 DEFAULT_BATCH_SIZE = 0     # Number of images per zip file (0 = no zipping)
+session = new_session("birefnet-portrait")  # Set background removal model
+
 
 def parse_arguments():
     """Parses command-line arguments."""
