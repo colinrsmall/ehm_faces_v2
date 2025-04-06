@@ -18,6 +18,8 @@ FILENAME_DATE_FORMAT = "%d_%m_%Y" # Date format for output filename
 NUM_INFERENCE_STEPS = 40 # Number of diffusion steps
 GUIDANCE_SCALE = 4 # Guidance scale for inference
 DEFAULT_NUM_IMAGES = 25 # Default number of images to generate
+DEFAULT_WIDTH = 512 # Default output image width
+DEFAULT_HEIGHT = 512 # Default output image height
 
 def parse_arguments():
     """Parses command-line arguments."""
@@ -34,6 +36,8 @@ def parse_arguments():
     parser.add_argument("--use_xformers", action='store_true', help="Enable xFormers memory efficient attention for potential speedup.")
     parser.add_argument("--use_torch_compile", action='store_true', help="Enable torch.compile (PyTorch 2.0+) for potential speedup (adds compile time).")
     parser.add_argument("--fuse_lora", action='store_true', help="Fuse LoRA weights into the base model before generation.")
+    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Width of the generated images.")
+    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Height of the generated images.")
     return parser.parse_args()
 
 def run_inference(args):
@@ -170,7 +174,7 @@ def run_inference(args):
                  # IMPORTANT: Adjust the format string '%d.%m.%Y' if your CSV uses a different date format!
                  dob_obj = datetime.strptime(dob_str, '%d.%m.%Y')
                  dob_formatted = dob_obj.strftime(FILENAME_DATE_FORMAT)
-            except ValueError:
+            except ValueError: # Handle potential date parsing errors
                  print(f"Warning: Could not parse date '{dob_str}' for {name} using format '%d.%m.%Y'. Using original string as fallback.")
                  dob_formatted = dob_str.replace(".", "_").replace("/", "_").replace("-", "_").replace(" ", "_") # Basic fallback
 
@@ -186,12 +190,15 @@ def run_inference(args):
                  # print(f"Skipping {filename}, already exists.")
                  continue
 
-            # Run inference
-            with torch.no_grad(): # Conserve memory
+            # Generate image
+            # Use torch.inference_mode() for potentially lower memory and faster execution
+            with torch.inference_mode():
                 image = pipe(
-                    prompt,
+                    prompt=prompt,
                     num_inference_steps=args.steps,
-                    guidance_scale=args.guidance
+                    guidance_scale=args.guidance,
+                    width=args.width,
+                    height=args.height
                 ).images[0]
 
             # Save image
