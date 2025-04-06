@@ -189,7 +189,8 @@ def run_inference(args):
                     num_inference_steps=args.steps,
                     guidance_scale=args.guidance,
                     width=args.width,
-                    height=args.height
+                    height=args.height,
+                    disable_tqdm=True # Disable inner step progress bar
                 ).images[0]
 
             # Save image
